@@ -1,42 +1,89 @@
-# quick2api 插件构建脚本
-# 由于 mingw 的 ld.exe 无法处理中文路径，构建在纯 ASCII 目录 C:\q2abuild 进行，
-# 产物再拷回工作区。工具链位于 C:\q2atools（纯 ASCII 物理路径）。
+# quick2api 构建脚本（Windows / PowerShell）
+#
+# 用法:
+#   .\build.ps1                                   # 默认输出到 .\dist\quick2api.dll
+#   .\build.ps1 -OutFile C:\out\quick2api.dll     # 指定输出路径
+#   .\build.ps1 -ToolRoot C:\q2atools             # 指定便携工具链目录（含 go\ 与 mingw64\）
+#
+# 前置条件:
+#   - Go 1.22+
+#   - C 编译器（Windows 下用 mingw-w64，需在 PATH 中；或用 -ToolRoot 指定）
+#
+# 关于路径: mingw 的 ld.exe 处理不了含非 ASCII 字符的路径，会在链接阶段报
+# "cannot find dllcrt2.o"。脚本检测到源码或临时目录含非 ASCII 时，会自动把
+# 源码复制到 %TEMP% 下的纯 ASCII 目录构建，再把产物拷回。
+
+param(
+    [string]$OutFile = "",
+    [string]$ToolRoot = "",
+    [string]$GoOS = "windows",
+    [string]$GoArch = "amd64"
+)
+
 $ErrorActionPreference = "Stop"
-$WS = "C:\zAIproduction\深度空间2\cliproxyapi-quick2api"
-$BUILD = "C:\q2abuild"
-$TOOLS = "C:\q2atools"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$Src = $PSScriptRoot
+$hasNonAscii = { param($p) $p -match '[^\x00-\x7F]' }
 
-$env:GOROOT = "$TOOLS\go"
-$env:PATH = "$env:GOROOT\bin;$TOOLS\mingw64\bin;$env:PATH"
+if ($ToolRoot) {
+    $goroot = Join-Path $ToolRoot "go"
+    if (Test-Path $goroot) { $env:GOROOT = $goroot }
+    $mingwBin = Join-Path $ToolRoot "mingw64\bin"
+    if (Test-Path $mingwBin) { $env:PATH = "$mingwBin;$env:PATH" }
+}
+if ($env:GOROOT) { $env:PATH = "$env:GOROOT\bin;$env:PATH" }
+
 $env:CGO_ENABLED = "1"
-$env:GOOS = "windows"
-$env:GOARCH = "amd64"
-$env:GOTMPDIR = "$BUILD\gotmp"
-$env:GOCACHE = "$BUILD\gocache"
-$env:TEMP = "$BUILD\gotmp"
-$env:TMP = "$BUILD\gotmp"
+$env:GOOS = $GoOS
+$env:GOARCH = $GoArch
+if (-not $env:GOPROXY) { $env:GOPROXY = "https://proxy.golang.org,direct" }
 
-$env:GOPROXY = "https://goproxy.cn,https://proxy.golang.org,direct"
-New-Item -ItemType Directory -Force -Path "$BUILD\gotmp","$BUILD\gocache","$BUILD\dist" | Out-Null
+# 构建目录：源码路径含非 ASCII 时切到临时目录
+$work = $Src
+$tempWork = $null
+if (& $hasNonAscii $Src) {
+    $tempWork = Join-Path $env:TEMP ("q2a-build-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    Write-Host "[build] 源码路径含非 ASCII 字符，改用临时目录: $tempWork"
+    New-Item -ItemType Directory -Force -Path $tempWork | Out-Null
+    & robocopy $Src $tempWork /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 /XD .git dist | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "复制源码失败: $LASTEXITCODE" }
+    $work = $tempWork
+}
 
-Write-Output "== 同步源码 =="
-& robocopy "$WS\src" "$BUILD\src" /MIR /NFL /NDL /NJH /NJS /NP /R:1 /W:1 2>&1 | Out-Null
-if ($LASTEXITCODE -ge 8) { throw "robocopy failed: $LASTEXITCODE" }
+# Go 的临时/缓存目录同样不能含非 ASCII
+$tmpBase = Join-Path $env:TEMP "q2a-tmp"
+if (& $hasNonAscii $tmpBase) { $tmpBase = "C:\q2a-tmp" }
+New-Item -ItemType Directory -Force -Path "$tmpBase\gotmp", "$tmpBase\gocache" | Out-Null
+$env:GOTMPDIR = "$tmpBase\gotmp"
+$env:GOCACHE = "$tmpBase\gocache"
+$env:TEMP = "$tmpBase\gotmp"
+$env:TMP = "$tmpBase\gotmp"
 
-Write-Output "== gofmt =="
-Push-Location "$BUILD\src"
-& gofmt -w .
-Pop-Location
+if (-not $OutFile) { $OutFile = Join-Path $Src "dist\quick2api.dll" }
+$finalOut = $OutFile
+New-Item -ItemType Directory -Force -Path (Split-Path $finalOut) | Out-Null
+# mingw 的链接器写不出非 ASCII 路径：先输出到 ASCII 目录，构建完再用 PowerShell 拷回
+if (& $hasNonAscii $OutFile) {
+    $OutFile = Join-Path $tmpBase "quick2api.dll"
+    Write-Host "[build] 输出路径含非 ASCII 字符，先输出到: $OutFile"
+}
 
-Write-Output "== go build -buildmode=c-shared =="
-Push-Location "$BUILD\src"
-$out = "$BUILD\dist\quick2api.dll"
-& go build -buildmode=c-shared -ldflags="-s -w" -o $out . 2>&1
-$code = $LASTEXITCODE
-Pop-Location
-if ($code -ne 0) { throw "go build failed: $code" }
+Write-Host "[build] go: $(& go version)"
+Write-Host "[build] 源码: $work"
 
-$final = "$WS\dist\quick2api.dll"
-New-Item -ItemType Directory -Force -Path (Split-Path $final) | Out-Null
-Copy-Item $out $final -Force
-Write-Output ("BUILD OK: " + $final + "  size=" + (Get-Item $final).Length)
+Push-Location $work
+try {
+    & go build -buildmode=c-shared -ldflags="-s -w" -o $OutFile .
+    $code = $LASTEXITCODE
+} finally {
+    Pop-Location
+    if ($tempWork) { Remove-Item $tempWork -Recurse -Force -ErrorAction SilentlyContinue }
+}
+if ($code -ne 0) { throw "构建失败，exit=$code" }
+
+if ($finalOut -ne $OutFile) {
+    Copy-Item $OutFile $finalOut -Force
+    Write-Host "[build] 已拷回: $finalOut"
+}
+
+Write-Host ("[build] 完成: " + $finalOut + "  " + [math]::Round((Get-Item $finalOut).Length / 1MB, 2) + " MB")
