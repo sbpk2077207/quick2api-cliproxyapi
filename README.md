@@ -1,5 +1,11 @@
 # quick2api
 
+> ### ⬇️ [**下载插件** quick2api-local-install.zip（v0.1.49，3.2 MB）](https://github.com/sbpk2077207/quick2api-cliproxyapi/releases/latest/download/quick2api-local-install.zip)
+>
+> 下载后在 EasyCLIProxyAPI / CLIProxyAPI 的插件页用「本地上传安装」选择该 zip 即可。
+> 全部版本见 [Releases](https://github.com/sbpk2077207/quick2api-cliproxyapi/releases)。
+> 本仓库只放源码，编译产物（`.dll`）统一走 Release，不进 git。
+
 把 **Amazon Quick** 办公 AI 背后的模型接入 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 的原生动态库插件。
 
 通过浏览器 OAuth（OIDC + PKCE）直连 Quick 云端，**不需要安装 Amazon Quick 桌面端**，也不需要绑信用卡。接入后任意 OpenAI / Anthropic 兼容客户端都能直接调用。
