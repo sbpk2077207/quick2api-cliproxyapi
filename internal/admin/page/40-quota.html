@@ -1,0 +1,34 @@
+  // ---- 状态加载 ----
+  //
+  // 原文件的额度查询逻辑与 Quick 无关，已整段移除。这个片段现在只负责
+  // 拉 /status 并驱动账号卡片重渲染。文件名保持 40- 前缀以维持拼接顺序。
+
+  var refreshTimer = null;
+
+  function loadStatus(skipClearBanner) {
+    if (!skipClearBanner) clearBanner();
+    return api("GET", "/status").then(function (status) {
+      if (!status) return null;
+      lastStatus = status;
+      authReady = true;
+      stopped = false;
+      var box = document.getElementById("keyBox");
+      if (box) box.hidden = true;
+      renderAccounts(status);
+      return status;
+    }).catch(function (err) {
+      if (err && err.status === 401) return null;
+      if (err && err.timeout) { banner("warn", err.message, 0); return null; }
+      banner("err", t("操作失败：") + (err && err.message ? err.message : err));
+      return null;
+    });
+  }
+
+  // scheduleRefresh 每 30 秒静默刷新一次账号状态（页面隐藏时跳过）。
+  function scheduleRefresh() {
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = setInterval(function () {
+      if (document.hidden || !authReady || stopped) return;
+      loadStatus(true).catch(function () { });
+    }, 30000);
+  }

@@ -1,0 +1,67 @@
+  // ---- 密钥输入、初始化与事件绑定 ----
+
+  function useManualKey() {
+    if (keyBusy) return;
+    var input = document.getElementById("keyInput");
+    if (!input) return;
+    var raw = input.value;
+    if (!raw) { setKeyStatus(t("请在上面填入管理密钥")); return; }
+    if (!KEY_RE.test(raw)) { setKeyStatus("管理密钥只能包含可见 ASCII 字符"); return; }
+    keyBusy = true;
+    manualKey = raw;
+    stopped = false;
+    setKeyStatus("");
+    loadStatus(true).then(function (status) {
+      keyBusy = false;
+      if (!status) {
+        manualKey = "";
+        setKeyStatus(t("管理密钥无效或缺失"));
+        return;
+      }
+      try { sessionStorage.setItem(MANUAL_STORE_KEY, raw); } catch (e) { /* 忽略 */ }
+      var box = document.getElementById("keyBox");
+      if (box) box.hidden = true;
+      banner("ok", t("账号") + " ✓", 3000);
+      loadModels();
+      scheduleRefresh();
+    }).catch(function (err) {
+      keyBusy = false;
+      manualKey = "";
+      setKeyStatus((err && err.message) || String(err));
+    });
+  }
+
+  var btnUseKey = document.getElementById("btnUseKey");
+  if (btnUseKey) btnUseKey.addEventListener("click", useManualKey);
+
+  var keyInput = document.getElementById("keyInput");
+  if (keyInput) {
+    keyInput.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") useManualKey();
+    });
+  }
+
+  var modelFilter = document.getElementById("modelFilter");
+  if (modelFilter) modelFilter.addEventListener("input", renderModels);
+
+  // 添加账号：直接发起登录（本插件只有 OAuth 一种添加方式）。
+  var btnAddAccount = document.getElementById("btnAddAccount");
+  if (btnAddAccount) {
+    btnAddAccount.addEventListener("click", function () { openLoginModal(); });
+  }
+
+  // ---- 启动 ----
+  function boot() {
+    if (!managementKey()) {
+      revealKeyInput();
+      setKeyStatus(t("请在上面填入管理密钥"));
+      return;
+    }
+    loadStatus().then(function (status) {
+      if (!status) return;
+      loadModels();
+      scheduleRefresh();
+    });
+  }
+
+  boot();

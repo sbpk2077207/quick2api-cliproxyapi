@@ -1,0 +1,121 @@
+  // ---- 模型表 ----
+
+  var allModels = [];
+
+  // tierLabel 把模型 ID 翻成档位名（quick-smart → 智能）。
+  function tierLabel(model) {
+    var id = String(model.id || "");
+    if (id.indexOf("smart") >= 0) return t("智能");
+    if (id.indexOf("balanced") >= 0) return t("均衡");
+    if (id.indexOf("fast") >= 0) return t("快速");
+    if (id.indexOf("advanced") >= 0) return t("进阶");
+    return "-";
+  }
+
+  function formatContext(n) {
+    if (!n) return "-";
+    if (n >= 1000000) return (n / 1000000) + "M";
+    if (n >= 1000) return Math.round(n / 1000) + "K";
+    return String(n);
+  }
+
+  function modelKey(model) { return model.id || ""; }
+
+  function renderModels() {
+    var box = document.getElementById("models");
+    if (!box) return;
+    var filterNode = document.getElementById("modelFilter");
+    var filter = (filterNode && filterNode.value || "").trim().toLowerCase();
+    box.textContent = "";
+
+    var models = allModels.filter(function (m) {
+      if (!filter) return true;
+      var text = [m.id, m.name, m.alias, m.vendor_id, m.vendor_name].join(" ").toLowerCase();
+      return text.indexOf(filter) >= 0;
+    });
+
+    setText("modelCount", allModels.length ? "(" + models.length + ")" : "");
+    if (!models.length) {
+      box.appendChild(el("div", t("暂无模型"), "empty"));
+      return;
+    }
+
+    var wrap = el("div", null, "table-wrap");
+    var table = document.createElement("table");
+    var thead = document.createElement("thead");
+    var headRow = document.createElement("tr");
+    [t("模型"), t("档位"), t("上下文"), t("状态")].forEach(function (name) {
+      headRow.appendChild(el("th", name));
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement("tbody");
+    models.forEach(function (model) {
+      var tr = document.createElement("tr");
+
+      var nameTd = document.createElement("td");
+      nameTd.className = "mono";
+      var nameSpan = el("span", model.alias || model.id);
+      nameSpan.title = t("点击模型名设置别名（留空恢复官方 ID）");
+      nameSpan.style.cursor = "pointer";
+      nameSpan.addEventListener("click", function () { editModelAlias(model, nameTd); });
+      nameTd.appendChild(nameSpan);
+      tr.appendChild(nameTd);
+
+      tr.appendChild(el("td", tierLabel(model)));
+      tr.appendChild(el("td", formatContext(model.context_length)));
+
+      var statusTd = document.createElement("td");
+      statusTd.appendChild(model.disabled ? pill(t("已停用"), "mute") : pill(t("已启用"), "ok"));
+      tr.appendChild(statusTd);
+
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    box.appendChild(wrap);
+  }
+
+  // editModelAlias 把模型名单元格换成输入框，回车保存。
+  function editModelAlias(model, cell) {
+    var original = model.alias || "";
+    var input = document.createElement("input");
+    input.type = "text";
+    input.value = original;
+    input.placeholder = model.id;
+    cell.textContent = "";
+    cell.appendChild(input);
+    input.focus();
+    input.select();
+
+    var done = false;
+    function commit(save) {
+      if (done) return;
+      done = true;
+      var next = input.value.trim();
+      if (!save || next === original) { renderModels(); return; }
+      api("POST", "/models/alias", { model: modelKey(model), alias: next })
+        .then(function (data) {
+          if (data) model.alias = next;
+          renderModels();
+        })
+        .catch(function (err) { banner("err", t("操作失败：") + err.message); renderModels(); });
+    }
+    input.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") commit(true);
+      if (ev.key === "Escape") commit(false);
+    });
+    input.addEventListener("blur", function () { commit(false); });
+  }
+
+  function loadModels() {
+    return api("GET", "/models").then(function (data) {
+      if (!data) return;
+      allModels = (data && data.models) || [];
+      renderModels();
+    }).catch(function (err) {
+      if (err && err.status === 401) return;
+      banner("err", t("操作失败：") + (err && err.message ? err.message : err));
+    });
+  }

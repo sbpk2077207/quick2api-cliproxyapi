@@ -1,0 +1,167 @@
+  // ---- 登录流程（浏览器 OAuth）----
+  //
+  // 本插件要求 AWS OIDC 的 loopback 回调，因此授权必须在「跑插件的这台机器」
+  // 的浏览器里完成；远程/手机场景用下方「粘贴回调链接」兜底。
+
+  var loginTimer = null;
+  var currentLoginState = "";
+
+  function stopLoginPolling() {
+    if (loginTimer) { clearInterval(loginTimer); loginTimer = null; }
+  }
+
+  function loginModal() { return document.getElementById("loginModal"); }
+
+  function setLoginStatus(text) {
+    var node = document.getElementById("loginStatus");
+    if (node) node.textContent = text;
+  }
+
+  function setPasteStatus(text) {
+    var node = document.getElementById("pasteStatus");
+    if (node) node.textContent = text;
+  }
+
+  function closeLoginModal() {
+    stopLoginPolling();
+    currentLoginState = "";
+    var modal = loginModal();
+    if (modal) modal.hidden = true;
+  }
+
+  // unwrap 兼容 {ok,url,state} 与 {ok,data:{url,state}} 两种响应形态。
+  function unwrap(data) {
+    if (!data) return {};
+    if (data.data && typeof data.data === "object") return data.data;
+    return data;
+  }
+
+  function openLoginModal() {
+    var modal = loginModal();
+    if (!modal) return;
+    modal.hidden = false;
+    var urlInput = document.getElementById("loginUrl");
+    if (urlInput) urlInput.value = "";
+    var pasteBox = document.getElementById("pasteBox");
+    if (pasteBox) pasteBox.hidden = true;
+    setPasteStatus("");
+    setLoginStatus(t("正在获取授权链接…"));
+
+    api("POST", "/login/start", { vendor_id: "quick2api" }).then(function (raw) {
+      var data = unwrap(raw);
+      if (!(raw && raw.ok !== false) && raw && raw.ok === false) {
+        setLoginStatus(t("获取授权链接失败：") + (raw.error || raw.message || ""));
+        return;
+      }
+      var url = data.url || "";
+      var state = data.state || "";
+      if (!url) {
+        setLoginStatus(t("获取授权链接失败：") + (data.error || data.message || "响应缺少 url"));
+        return;
+      }
+      currentLoginState = state;
+      if (urlInput) urlInput.value = url;
+      setLoginStatus(t("请在新打开的浏览器页面完成 Amazon 登录授权。"));
+      var pb = document.getElementById("pasteBox");
+      if (pb) pb.hidden = false;
+      // 自动打开一次；浏览器可能拦截，用户仍可点按钮。
+      try { window.open(url, "_blank", "noopener"); } catch (e) { /* 忽略 */ }
+      if (state) pollLogin(state);
+    }).catch(function (err) {
+      setLoginStatus(t("获取授权链接失败：") + (err && err.message ? err.message : err));
+    });
+  }
+
+  function pollLogin(state) {
+    stopLoginPolling();
+    var attempts = 0;
+    loginTimer = setInterval(function () {
+      attempts++;
+      if (attempts > 150) {
+        stopLoginPolling();
+        setLoginStatus(t("授权超时，请重新发起。"));
+        return;
+      }
+      api("GET", hostPath("/get-auth-status?state=" + encodeURIComponent(state))).then(function (data) {
+        var value = (data && data.status) || "";
+        // 宿主可能把 success 映射成 ok 或 success，两种都认。
+        if (value === "ok" || value === "success") {
+          stopLoginPolling();
+          currentLoginState = "";
+          setLoginStatus(t("授权成功，账号已写入。"));
+          banner("ok", t("账号添加成功"));
+          closeLoginModal();
+          loadStatus(true);
+          return;
+        }
+        if (value === "error") {
+          stopLoginPolling();
+          setLoginStatus(t("授权失败：") + ((data && (data.error || data.message)) || t("未知")));
+          return;
+        }
+        setLoginStatus(t("等待授权中…（已等待 ") + attempts * 2 + t(" 秒）"));
+      }).catch(function (err) {
+        stopLoginPolling();
+        setLoginStatus(t("授权失败：") + (err && err.message ? err.message : err));
+      });
+    }, 2000);
+  }
+
+  function submitCallback() {
+    var area = document.getElementById("pasteUrl");
+    var btn = document.getElementById("btnSubmitCallback");
+    if (!area || !btn) return;
+    var raw = area.value.trim();
+    if (!raw) { setPasteStatus(t("把浏览器地址栏里的整条 localhost 链接粘贴到这里")); return; }
+    btn.disabled = true;
+    setPasteStatus(t("正在加载…"));
+    api("POST", "/login/callback", { state: currentLoginState, url: raw }).then(function (data) {
+      btn.disabled = false;
+      var value = (data && data.status) || "";
+      var message = (data && (data.message || data.error)) || "";
+      if (value === "ok" || value === "success") {
+        setPasteStatus("");
+        banner("ok", t("账号添加成功"));
+        closeLoginModal();
+        loadStatus(true);
+        return;
+      }
+      setPasteStatus(message || t("授权失败：") + value);
+    }).catch(function (err) {
+      btn.disabled = false;
+      setPasteStatus((err && err.message) || String(err));
+    });
+  }
+
+  (function bindLoginEvents() {
+    var btnOpen = document.getElementById("btnOpenUrl");
+    if (btnOpen) btnOpen.addEventListener("click", function () {
+      var input = document.getElementById("loginUrl");
+      if (input && input.value) {
+        try { window.open(input.value, "_blank", "noopener"); } catch (e) { /* 忽略 */ }
+      }
+    });
+
+    var btnCopy = document.getElementById("btnCopyUrl");
+    if (btnCopy) btnCopy.addEventListener("click", function () {
+      var input = document.getElementById("loginUrl");
+      if (!input || !input.value) return;
+      var done = function () { banner("ok", t("已复制"), 2000); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(input.value).then(done, function () { input.select(); });
+      } else {
+        input.select();
+      }
+    });
+
+    var btnCancel = document.getElementById("btnCancel");
+    if (btnCancel) btnCancel.addEventListener("click", closeLoginModal);
+
+    var btnSubmit = document.getElementById("btnSubmitCallback");
+    if (btnSubmit) btnSubmit.addEventListener("click", submitCallback);
+
+    var modal = loginModal();
+    if (modal) modal.addEventListener("click", function (ev) {
+      if (ev.target === modal) closeLoginModal();
+    });
+  })();

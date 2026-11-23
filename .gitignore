@@ -1,0 +1,28 @@
+# 构建产物（不提交二进制）
+dist/
+*.dll
+*.so
+*.dylib
+*.exe
+*.h
+
+# 工具链与构建缓存
+toolchain/
+gocache/
+gotmp/
+
+# 本地运行状态（含凭证与日志，绝对不要提交）
+logs/
+oauth/
+backup-*/
+edge-quick/
+_reference/
+preview.html
+*.log
+*.bak
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

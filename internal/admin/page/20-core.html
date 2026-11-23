@@ -1,0 +1,332 @@
+<script>
+(function () {
+  "use strict";
+  var language = "zh-CN";
+  try { if (localStorage.getItem("quick2api-console-language") === "en") language = "en"; } catch (e) {}
+
+  // 只保留本插件实际用到的文案。
+  var translations = {
+    "Amazon Quick 账号与模型管理 · 免桌面端直连": "Amazon Quick accounts & models · no desktop app needed",
+    "管理密钥": "Management key",
+    "填入 CPA 管理密钥": "Enter the CPA management key",
+    "使用": "Use",
+    "本页会自动复用 CPA 管理面板已保存的密钥（面板需勾选「记住密码」）；读不到时在此填入一次即可。": "This page reuses the CPA panel's saved key when Remember password is enabled. Otherwise enter it here once.",
+    "账号": "Accounts",
+    "添加账号": "Add account",
+    "模型": "Models",
+    "筛选模型": "Filter models",
+    "重新登录": "Re-login",
+    "停用": "Disable",
+    "启用": "Enable",
+    "删除": "Delete",
+    "确认删除": "Confirm delete",
+    "取消": "Cancel",
+    "提交": "Submit",
+    "状态": "Status",
+    "有效期": "Expires",
+    "区域": "Region",
+    "账号 ID": "Account ID",
+    "没有账号。点右上角「添加账号」用浏览器完成 Amazon 授权。": "No accounts yet. Click Add account to authorize with your browser.",
+    "正在加载…": "Loading…",
+    "已复制": "Copied",
+    "复制链接": "Copy link",
+    "打开授权页": "Open authorization page",
+    "正在获取授权链接…": "Getting authorization link…",
+    "获取授权链接失败：": "Failed to get authorization link: ",
+    "请在新打开的浏览器页面完成 Amazon 登录授权。": "Complete the Amazon sign-in in the browser tab that just opened.",
+    "等待授权中…（已等待 ": "Waiting for authorization… (",
+    " 秒）": "s)",
+    "授权成功，账号已写入。": "Authorized. Account saved.",
+    "授权失败：": "Authorization failed: ",
+    "授权超时，请重新发起。": "Authorization timed out. Start again.",
+    "授权没回到本机？粘贴回调链接": "Callback didn't arrive? Paste the callback URL",
+    "把浏览器地址栏里的整条 localhost 链接粘贴到这里": "Paste the full localhost URL from the browser address bar",
+    "账号添加成功": "Account added",
+    "已删除 ": "Deleted ",
+    " 个账号": " account(s)",
+    "操作失败：": "Operation failed: ",
+    "接口返回的不是 JSON（HTTP ": "API returned non-JSON (HTTP ",
+    "接口没有返回内容（HTTP ": "API returned no content (HTTP ",
+    "）：该管理路由可能未在插件里注册": "): the management route may not be registered",
+    "请求超时（": "Request timed out (",
+    "秒）：": "s): ",
+    "面板存储格式版本不受支持，请升级本插件：enc::v": "Unsupported panel storage version; update this plugin: enc::v",
+    "管理密钥无效或缺失": "Invalid or missing management key",
+    "。已停止全部自动请求。": ". All automatic requests stopped.",
+    "请在上面填入管理密钥": "Enter the management key above",
+    "个": "",
+    "上下文": "Context",
+    "档位": "Tier",
+    "智能": "Smart",
+    "均衡": "Balanced",
+    "快速": "Fast",
+    "进阶": "Advanced",
+    "别名": "Alias",
+    "点击模型名设置别名（留空恢复官方 ID）": "Click a model name to set an alias (blank restores the official ID)",
+    "暂无模型": "No models yet",
+    "已启用": "Enabled",
+    "已停用": "Disabled",
+    "活跃": "Active",
+    "待刷新": "Needs refresh",
+    "已停用（账号）": "Disabled (account)",
+    "未知": "Unknown",
+    "列表为空": "Empty"
+  };
+
+  function t(text) {
+    return language === "en" && Object.prototype.hasOwnProperty.call(translations, text) ? translations[text] : text;
+  }
+
+  var languageSelect = document.getElementById("language");
+  languageSelect.value = language;
+  languageSelect.addEventListener("change", function () {
+    try { localStorage.setItem("quick2api-console-language", this.value); } catch (e) { this.value = language; return; }
+    location.reload();
+  });
+  if (language === "en") {
+    document.documentElement.lang = "en";
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      var node = walker.currentNode;
+      if (node.parentElement.tagName === "SCRIPT" || node.parentElement.closest("#language")) continue;
+      node.nodeValue = node.nodeValue.replace(/\S(?:[\s\S]*\S)?/, function (text) { return t(text); });
+    }
+    document.querySelectorAll("[placeholder], [title]").forEach(function (n) {
+      ["placeholder", "title"].forEach(function (a) { if (n.hasAttribute(a)) n.setAttribute(a, t(n.getAttribute(a))); });
+    });
+  }
+
+  var BASE = "__BASE__";
+  var MGMT = "/v0/management" + BASE;
+  var HOST_MGMT = "/v0/management";
+  var HOST_PREFIX = "@host";
+  var stopped = false;
+  var authReady = false;
+
+  // ---- 管理密钥复用（与 CPA 面板同源，格式必须逐字节一致）----
+  //
+  //   enc::v1:: + base64( utf8(JSON) XOR utf8(seed|host|userAgent) )
+  //   enc::v2:: + base64( utf8(JSON) XOR utf8(seed|host) )
+  //   seed = "cli-proxy-api-webui::secure-storage"
+  //
+  // 这段不要"优化"：派生串、前缀识别、字符集校验三者必须同源，否则会出现
+  // 「门禁认、解码不认」或把乱码塞进 Authorization 头导致浏览器直接拒发请求。
+  var OBF_PREFIX_RE = /^enc::v(\d+)::/;
+  var OBF_SEED = "cli-proxy-api-webui::secure-storage";
+  var PANEL_STORE_KEY = "cli-proxy-auth";
+  var PANEL_KEY_FIELD = "managementKey";
+  var MANUAL_STORE_KEY = "cpa-management-key";
+  var manualKey = "";
+  var keyBusy = false;
+  var keyRetryAfter = 0;
+
+  function obfuscationKeys(version) {
+    var official = OBF_SEED + "|" + location.host;
+    if (version === "1") return [official + "|" + navigator.userAgent];
+    return [official, OBF_SEED + "|v" + version + "|" + location.host];
+  }
+
+  function xorDecode(payload, keyText) {
+    var key = new TextEncoder().encode(keyText);
+    var binary = atob(payload);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    for (var j = 0; j < bytes.length; j++) bytes[j] ^= key[j % key.length];
+    return new TextDecoder().decode(bytes);
+  }
+
+  function isObfuscated(raw) { return OBF_PREFIX_RE.test(raw); }
+
+  function deobfuscateAll(raw) {
+    var match = OBF_PREFIX_RE.exec(raw || "");
+    if (!match) return [];
+    var version = match[1];
+    if (version !== "1" && version !== "2") {
+      try { console.warn(t("面板存储格式版本不受支持，请升级本插件：enc::v") + version + "::"); } catch (e) { /* 忽略 */ }
+      return [];
+    }
+    var payload = raw.slice(match[0].length);
+    var texts = [];
+    obfuscationKeys(version).forEach(function (keyText) {
+      try { texts.push(xorDecode(payload, keyText)); } catch (e) { /* 该派生串解不开，试下一个 */ }
+    });
+    return texts;
+  }
+
+  var KEY_RE = /^[\x21-\x7E]+$/;
+
+  function normalizeKeyValue(raw) {
+    if (!raw) return "";
+    var text = String(raw).trim();
+    if (isObfuscated(text)) return "";
+    if (text === "null" || text === "undefined") return "";
+    if (text.length > 1 && text.charAt(0) === '"' && text.charAt(text.length - 1) === '"') {
+      try { text = JSON.parse(text); } catch (e) { /* 保留原值 */ }
+    }
+    if (typeof text !== "string") return "";
+    text = text.trim();
+    if (text === "" || text === "null" || text === "undefined") return "";
+    if (!KEY_RE.test(text)) return "";
+    return text;
+  }
+
+  function snapshotKey(text) {
+    var snapshot = null;
+    try { snapshot = JSON.parse(text); } catch (e) { return ""; }
+    if (!snapshot || typeof snapshot !== "object") return "";
+    var state = (snapshot.state && typeof snapshot.state === "object") ? snapshot.state : snapshot;
+    return normalizeKeyValue(state[PANEL_KEY_FIELD]);
+  }
+
+  function panelAuthKey() {
+    var raw = "";
+    try { raw = localStorage.getItem(PANEL_STORE_KEY) || ""; } catch (e) { return ""; }
+    if (!raw) return "";
+    var texts = isObfuscated(raw) ? deobfuscateAll(raw) : [raw];
+    for (var i = 0; i < texts.length; i++) {
+      var key = snapshotKey(texts[i]);
+      if (key) return key;
+    }
+    return "";
+  }
+
+  function managementKey() {
+    if (manualKey) return manualKey;
+    var fromPanel = panelAuthKey();
+    if (fromPanel) return fromPanel;
+    try { return normalizeKeyValue(sessionStorage.getItem(MANUAL_STORE_KEY)); }
+    catch (e) { return ""; }
+  }
+
+  // ---- 横幅 ----
+  var bannerTimer = null;
+
+  function clearBanner() {
+    if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
+    var node = document.getElementById("banner");
+    if (!node) return;
+    node.className = "banner";
+    node.textContent = "";
+  }
+
+  function banner(kind, text, duration) {
+    if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
+    var node = document.getElementById("banner");
+    if (!node) return;
+    var timeout = duration !== undefined ? duration : (kind === "ok" ? 5000 : (kind === "warn" ? 6000 : 8000));
+    node.className = "banner show " + kind;
+    node.textContent = text;
+    if (timeout > 0) {
+      bannerTimer = setTimeout(clearBanner, timeout);
+    } else {
+      var close = document.createElement("button");
+      close.className = "close";
+      close.type = "button";
+      close.textContent = "×";
+      close.setAttribute("aria-label", "close");
+      close.addEventListener("click", clearBanner);
+      node.appendChild(close);
+    }
+  }
+
+  // haltOnAuthFailure 在鉴权失败时闸死所有后续请求。
+  // CPA 把「未携带密钥」也计为一次失败，连续失败会按 IP 封禁管理接口。
+  function haltOnAuthFailure(status) {
+    if (status === 401 || status === 403) {
+      stopped = true;
+      authReady = false;
+      banner("err", t("管理密钥无效或缺失") + "（HTTP " + status + t("）。已停止全部自动请求。"), 0);
+      revealKeyInput();
+      return true;
+    }
+    return false;
+  }
+
+  function revealKeyInput() {
+    var box = document.getElementById("keyBox");
+    if (box) box.hidden = false;
+  }
+
+  function setKeyStatus(text) {
+    var node = document.getElementById("keyStatus");
+    if (node) node.textContent = text;
+  }
+
+  function hostPath(path) { return HOST_PREFIX + path; }
+
+  var API_TIMEOUT_MS = 60000;
+
+  // api 是唯一的管理接口出口：自动带密钥、认 401、把非 JSON/空体翻成人话。
+  function api(method, path, body, options) {
+    if (stopped) return Promise.resolve(null);
+    var key = managementKey();
+    if (!key) { revealKeyInput(); return Promise.resolve(null); }
+    var headers = { "Content-Type": "application/json" };
+    headers["Authorization"] = "Bearer " + key;
+    var url = path.indexOf(HOST_PREFIX) === 0
+      ? HOST_MGMT + path.slice(HOST_PREFIX.length)
+      : MGMT + path;
+    var timeout = (options && options.timeout) || API_TIMEOUT_MS;
+    var controller = null, timer = null;
+    var init = { method: method, headers: headers, body: body ? JSON.stringify(body) : undefined };
+    if (typeof AbortController === "function") {
+      controller = new AbortController();
+      init.signal = controller.signal;
+      timer = setTimeout(function () { controller.abort(); }, timeout);
+    }
+    var request = fetch(url, init).then(function (resp) {
+      if (haltOnAuthFailure(resp.status)) return null;
+      return resp.text().then(function (raw) {
+        var data = null;
+        if (raw) {
+          try { data = JSON.parse(raw); } catch (parseErr) {
+            var bad = new Error(t("接口返回的不是 JSON（HTTP ") + resp.status + "）");
+            bad.status = resp.status;
+            throw bad;
+          }
+        }
+        if (!resp.ok) {
+          var msg = (data && data.error) ? data.error : ("HTTP " + resp.status);
+          var failure = new Error(msg);
+          failure.status = resp.status;
+          throw failure;
+        }
+        if (data === null) {
+          var empty = new Error(t("接口没有返回内容（HTTP ") + resp.status + t("）：该管理路由可能未在插件里注册"));
+          empty.status = resp.status;
+          throw empty;
+        }
+        return data;
+      });
+    });
+    return request.then(function (data) {
+      if (timer) { clearTimeout(timer); timer = null; }
+      return data;
+    }, function (err) {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (err && (err.name === "AbortError" || err.code === 20)) {
+        var timeoutError = new Error(t("请求超时（") + Math.round(timeout / 1000) + t("秒）：") + method + " " + path);
+        timeoutError.status = 0;
+        timeoutError.timeout = true;
+        throw timeoutError;
+      }
+      throw err;
+    });
+  }
+
+  // ---- DOM 小工具 ----
+  function el(tag, text, className) {
+    var node = document.createElement(tag);
+    if (text !== undefined && text !== null) node.textContent = text;
+    if (className) node.className = className;
+    return node;
+  }
+
+  function pill(text, kind) {
+    return el("span", text, "pill " + (kind || "mute"));
+  }
+
+  function setText(id, text) {
+    var node = document.getElementById(id);
+    if (node) node.textContent = text;
+  }

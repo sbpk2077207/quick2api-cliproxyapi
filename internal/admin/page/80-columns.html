@@ -1,0 +1,20 @@
+  // ---- 收尾 ----
+  //
+  // 原「模型表列展示」整套逻辑（列显隐/持久化）已随多供应商场景一起移除：
+  // 本插件只有 4 个固定档位模型，列展示没有意义。
+  //
+  // 这个片段固定排在最后，负责闭合 20-core 打开的 IIFE 与文档结构，
+  // 以及兜住未捕获的脚本错误（避免页面静默失效、用户只看到空白）。
+
+  window.addEventListener("error", function (ev) {
+    try {
+      var node = document.getElementById("banner");
+      if (node && !node.classList.contains("show")) {
+        banner("err", "页面脚本错误：" + (ev.message || "unknown"), 0);
+      }
+    } catch (e) { /* 兜底自身不再抛错 */ }
+  });
+})();
+</script>
+</body>
+</html>

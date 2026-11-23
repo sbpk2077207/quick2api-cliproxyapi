@@ -1,0 +1,142 @@
+  // ---- 账号卡片 ----
+
+  // lastStatus 缓存最近一次 /status 响应，供局部重渲染使用。
+  var lastStatus = null;
+  var editingAccount = "";
+
+  function accountKey(account) {
+    return account.file_id || account.auth_id || account.label || "";
+  }
+
+  function accountDisplay(account) {
+    return account.alias || account.label || account.native_label || account.file_id || t("未知");
+  }
+
+  function accountOriginalName(account) {
+    return account.native_label || account.label || account.file_id || "";
+  }
+
+  function inEditMode(key) { return editingAccount === key; }
+
+  // statusPill 把账号状态翻成色点 + 文案。
+  function statusPill(account) {
+    if (account.disabled) return pill(t("已停用"), "mute");
+    var status = String(account.status || "").toLowerCase();
+    if (status === "active") return pill(t("活跃"), "ok");
+    if (status === "error" || status === "expired") return pill(t("待刷新"), "warn");
+    return pill(status || t("未知"), "mute");
+  }
+
+  function dotFor(account) {
+    if (account.disabled) return el("span", "", "dot err");
+    var status = String(account.status || "").toLowerCase();
+    if (status === "active") return el("span", "", "dot ok");
+    return el("span", "", "dot warn");
+  }
+
+  function accountCard(account) {
+    var key = accountKey(account);
+    var card = el("div", null, "acct" + (account.disabled ? " off" : ""));
+
+    var top = el("div", null, "acct-top");
+    top.appendChild(dotFor(account));
+    if (inEditMode(key)) {
+      var input = document.createElement("input");
+      input.type = "text";
+      input.value = account.alias || "";
+      input.placeholder = accountOriginalName(account);
+      input.className = "acct-edit";
+      var saveRow = el("div", null, "acct-actions");
+      var saveBtn = el("button", t("使用"), "act primary");
+      saveBtn.type = "button";
+      var cancelBtn = el("button", t("取消"), "act");
+      cancelBtn.type = "button";
+      saveRow.appendChild(saveBtn);
+      saveRow.appendChild(cancelBtn);
+      card.appendChild(input);
+      card.appendChild(saveRow);
+
+      function finish(commit) {
+        if (!commit) { editingAccount = ""; renderAccounts(lastStatus); return; }
+        var next = input.value.trim();
+        if (next === accountOriginalName(account)) next = "";
+        saveBtn.disabled = true;
+        api("POST", "/accounts/alias", { file_id: account.file_id, alias: next })
+          .then(function () { editingAccount = ""; return loadStatus(true); })
+          .catch(function (err) { saveBtn.disabled = false; banner("err", t("操作失败：") + err.message); });
+      }
+      saveBtn.addEventListener("click", function () { finish(true); });
+      cancelBtn.addEventListener("click", function () { finish(false); });
+      input.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter") finish(true);
+        if (ev.key === "Escape") finish(false);
+      });
+      setTimeout(function () { input.focus(); input.select(); }, 0);
+      return card;
+    }
+
+    var name = el("span", accountDisplay(account), "acct-name");
+    name.title = t("别名") + " ✎";
+    name.style.cursor = "pointer";
+    name.addEventListener("click", function () { editingAccount = key; renderAccounts(lastStatus); });
+    top.appendChild(name);
+    top.appendChild(statusPill(account));
+    card.appendChild(top);
+
+    var meta = el("div", null, "acct-meta");
+    var line1 = el("div");
+    line1.appendChild(el("b", account.account || account.file_id || "-"));
+    meta.appendChild(line1);
+    var line2 = el("div");
+    line2.textContent = (account.vendor_name || account.vendor_id || "-") +
+      (account.realm ? " · " + account.realm : "");
+    meta.appendChild(line2);
+    card.appendChild(meta);
+
+    var actions = el("div", null, "acct-actions");
+    var toggleBtn = el("button", account.disabled ? t("启用") : t("停用"), "act");
+    toggleBtn.type = "button";
+    toggleBtn.addEventListener("click", function () {
+      toggleBtn.disabled = true;
+      api("POST", "/accounts/enabled", { account_ids: [account.file_id], enabled: !!account.disabled })
+        .then(function () { return loadStatus(true); })
+        .catch(function (err) { toggleBtn.disabled = false; banner("err", t("操作失败：") + err.message); });
+    });
+    actions.appendChild(toggleBtn);
+
+    var delBtn = el("button", t("删除"), "act danger");
+    delBtn.type = "button";
+    var armed = false;
+    delBtn.addEventListener("click", function () {
+      if (!armed) {
+        armed = true;
+        delBtn.textContent = t("确认删除");
+        setTimeout(function () { armed = false; delBtn.textContent = t("删除"); }, 5000);
+        return;
+      }
+      delBtn.disabled = true;
+      api("POST", "/accounts/delete", { account_ids: [account.file_id] })
+        .then(function (data) {
+          banner("ok", t("已删除 ") + ((data && data.deleted) || 1) + t(" 个账号"));
+          return loadStatus(true);
+        })
+        .catch(function (err) { delBtn.disabled = false; banner("err", t("操作失败：") + err.message); });
+    });
+    actions.appendChild(delBtn);
+    card.appendChild(actions);
+
+    return card;
+  }
+
+  function renderAccounts(status) {
+    var box = document.getElementById("accounts");
+    if (!box) return;
+    var accounts = (status && status.accounts) || [];
+    setText("accountCount", accounts.length ? "(" + accounts.length + ")" : "");
+    box.textContent = "";
+    if (!accounts.length) {
+      box.appendChild(el("div", t("没有账号。点右上角「添加账号」用浏览器完成 Amazon 授权。"), "empty"));
+      return;
+    }
+    accounts.forEach(function (account) { box.appendChild(accountCard(account)); });
+  }
