@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "plugins": [
+    {
+      "id": "quick2api",
+      "name": "Amazon Quick (quick2api)",
+      "description": "Amazon Quick provider for CLIProxyAPI through browser OAuth (OIDC + PKCE). No Amazon Quick desktop app required. Exposes Quick's agent tiers as quick2api-quick-smart (Claude Opus 5.5, 1M context) / balanced / fast / advanced, with streaming and non-streaming Chat Completions, an embedded card-style console, and full provider isolation from other plugins.",
+      "author": "sbpk2077207",
+      "version": "0.1.49",
+      "repository": "https://github.com/sbpk2077207/quick2api-cliproxyapi",
+      "logo": "https://avatars.githubusercontent.com/u/340166077?s=64&v=4",
+      "homepage": "https://github.com/sbpk2077207/quick2api-cliproxyapi",
+      "license": "MIT",
+      "tags": [
+        "AWS",
+        "Provider",
+        "Quick",
+        "OAuth",
+        "Windows"
+      ],
+      "locales": {
+        "zh-CN": {
+          "description": "通过浏览器 OAuth（OIDC + PKCE）把 Amazon Quick 接入 CLIProxyAPI，无需安装 Amazon Quick 桌面端。把智能档暴露为 quick2api-quick-smart（Claude Opus 5.5，1M 上下文）/ balanced / fast / advanced，支持流式与非流式 Chat Completions，内置卡片式控制台，与同宿主其它插件 provider 完全隔离。"
+        }
+      }
+    }
+  ]
+}
